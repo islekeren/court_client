@@ -1,0 +1,6 @@
+# Court Client Requirements
+# Install with: pip install -r requirements.txt
+
+websockets>=11.0.0
+asyncio-mqtt>=0.11.0  # Optional: for MQTT support in the future
+python-dotenv>=1.0.0  # Load environment variables from .env file
