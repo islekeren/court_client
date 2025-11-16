@@ -120,6 +120,16 @@ class CourtClient:
     
     async def register(self):
         """Register this court with the central service"""
+        # Test RTSP connection before registering so the backend knows device status
+        self.logger.info("Testing RTSP connection before registration...")
+        try:
+            rtsp_ok = await self._test_rtsp_connection()
+        except Exception as e:
+            self.logger.error(f"RTSP test raised an exception: {e}")
+            rtsp_ok = False
+
+        rtsp_tested_at = datetime.utcnow().isoformat()
+
         registration_message = {
             "courtId": self.config['court_id'],
             "capabilities": self.config.get('capabilities', ['live', 'record']),
@@ -128,12 +138,17 @@ class CourtClient:
                 "courtNumber": self.config.get('court_number'),
                 "clubName": self.config.get('club_name'),
                 "location": self.config.get('location'),
-                "courtType": self.config.get('court_type')
+                "courtType": self.config.get('court_type'),
+                # Provide RTSP status to the backend so it can acknowledge device readiness
+                "rtspOk": rtsp_ok,
+                "rtspTestedAt": rtsp_tested_at
             }
         }
-        
+
         await self.ws.send(json.dumps(registration_message))
-        self.logger.info(f"Registration sent for court {self.config['court_id']} at {self.config.get('club_name', 'N/A')}")
+        self.logger.info(
+            f"Registration sent for court {self.config['court_id']} at {self.config.get('club_name', 'N/A')}. RTSP ok: {rtsp_ok}"
+        )
         
         # Wait for registration acknowledgment
         try:
@@ -499,10 +514,12 @@ class CourtClient:
             
             meta = data.get('meta', {})
             platform = meta.get('platform', 'youtube')
-            stream_key = meta.get('stream_key', self.config.get('youtube_stream_key'))
+            # Use stream key only from environment/config. Do NOT accept stream keys
+            # from incoming commands for security reasons.
+            stream_key = self.config.get('youtube_stream_key')
             
             self.logger.info(f"Stream parameters - platform: {platform}")
-            self.logger.info(f"Using stream key: {stream_key[:10]}..." if stream_key else "No stream key")
+            self.logger.info(f"Using stream key: {stream_key[:10]}..." if stream_key else "No stream key (set YOUTUBE_STREAM_KEY in .env)")
             
             if not stream_key:
                 self.logger.error("No stream key provided for live streaming")
@@ -842,7 +859,10 @@ def load_config():
 async def main():
     """Main entry point"""
     config = load_config()
-    
+    # Warn if youtube stream key is missing (streaming will fail if commands ask to start)
+    if not config.get('youtube_stream_key'):
+        print("Warning: YOUTUBE_STREAM_KEY is not set. Live streaming will fail unless you set it in .env.")
+
     # Validate required configuration
     required_fields = ['court_id', 'auth_token', 'rtsp_url']
     for field in required_fields:
