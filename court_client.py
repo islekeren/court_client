@@ -87,12 +87,20 @@ class CourtClient:
         else:
             uri = f"{protocol}://{self.config['server_host']}/court-ws"
         
-        max_retries = self.config.get('max_retries', 5)
-        retry_delay = self.config.get('retry_delay', 5)
+        # Exponential backoff delays: 1, 3, 5, 10, 15, 30, 60, 60, 60...
+        retry_delays = [1, 3, 5, 10, 15, 30, 60]
+        max_delay = 60
+        attempt = 0
         
-        for attempt in range(max_retries):
+        while True:  # Retry indefinitely
             try:
-                self.logger.info(f"Connecting to {uri} (attempt {attempt + 1}/{max_retries})")
+                # Calculate delay for this attempt
+                if attempt < len(retry_delays):
+                    retry_delay = retry_delays[attempt]
+                else:
+                    retry_delay = max_delay
+                
+                self.logger.info(f"Connecting to {uri} (attempt {attempt + 1}, next retry in {retry_delay}s if failed)")
                 
                 # Connect with settings that work well with Node.js ws library
                 # Disable client-side ping - let server handle ping/pong entirely
@@ -111,12 +119,9 @@ class CourtClient:
                 
             except Exception as e:
                 self.logger.error(f"Connection attempt {attempt + 1} failed: {e}")
-                if attempt < max_retries - 1:
-                    self.logger.info(f"Retrying in {retry_delay} seconds...")
-                    await asyncio.sleep(retry_delay)
-                else:
-                    self.logger.error("Max retries exceeded, giving up")
-                    return False
+                self.logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+                attempt += 1
     
     async def register(self):
         """Register this court with the central service"""
@@ -784,50 +789,78 @@ class CourtClient:
             await self.ws.close()
     
     async def run(self):
-        """Main event loop with explicit ping/pong handling"""
+        """Main event loop with automatic reconnection"""
         self.running = True
         
-        # Connect to server
-        if not await self.connect():
-            return False
-        
-        # Register with server
-        if not await self.register():
-            return False
-        
-        # Start heartbeat monitoring task
-        heartbeat_task = asyncio.create_task(self.heartbeat_loop())
-        
-        try:
-            # Use async iteration to handle all frame types
-            async for message in self.ws:
-                if not self.running:
-                    break
-                    
-                # Handle text messages (JSON commands)
-                if isinstance(message, str):
-                    await self.handle_message(message)
-                elif isinstance(message, bytes):
-                    # Binary message (not expected, but handle gracefully)
-                    self.logger.warning(f"Received unexpected binary message: {len(message)} bytes")
-                else:
-                    # This shouldn't happen
-                    self.logger.warning(f"Received unexpected message type: {type(message)}")
-                    
-        except ConnectionClosed:
-            self.logger.warning("WebSocket connection closed by server")
-        except WebSocketException as e:
-            self.logger.error(f"WebSocket error: {e}")
-        except Exception as e:
-            self.logger.error(f"Unexpected error in main loop: {e}")
-        finally:
-            heartbeat_task.cancel()
+        while self.running:
             try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
-            await self.cleanup()
-            
+                # Connect to server
+                if not await self.connect():
+                    # connect() now retries indefinitely, so this shouldn't happen
+                    # but if it does, wait a bit and try again
+                    self.logger.error("Failed to connect, waiting 5 seconds before retry...")
+                    await asyncio.sleep(5)
+                    continue
+                
+                # Register with server
+                if not await self.register():
+                    self.logger.error("Registration failed, reconnecting in 5 seconds...")
+                    await asyncio.sleep(5)
+                    continue
+                
+                # Start heartbeat monitoring task
+                heartbeat_task = asyncio.create_task(self.heartbeat_loop())
+                
+                try:
+                    # Use async iteration to handle all frame types
+                    async for message in self.ws:
+                        if not self.running:
+                            break
+                            
+                        # Handle text messages (JSON commands)
+                        if isinstance(message, str):
+                            await self.handle_message(message)
+                        elif isinstance(message, bytes):
+                            # Binary message (not expected, but handle gracefully)
+                            self.logger.warning(f"Received unexpected binary message: {len(message)} bytes")
+                        else:
+                            # This shouldn't happen
+                            self.logger.warning(f"Received unexpected message type: {type(message)}")
+                            
+                except ConnectionClosed:
+                    self.logger.warning("WebSocket connection closed by server, will reconnect...")
+                except WebSocketException as e:
+                    self.logger.error(f"WebSocket error: {e}, will reconnect...")
+                except Exception as e:
+                    self.logger.error(f"Unexpected error in main loop: {e}, will reconnect...")
+                finally:
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
+                    
+                    # Close current connection before reconnecting
+                    if self.ws:
+                        try:
+                            await self.ws.close()
+                        except:
+                            pass
+                        self.ws = None
+                    
+                    # If we're still running, wait a bit before reconnecting
+                    if self.running:
+                        self.logger.info("Waiting 3 seconds before reconnecting...")
+                        await asyncio.sleep(3)
+                    
+            except Exception as e:
+                self.logger.error(f"Fatal error in run loop: {e}")
+                if self.running:
+                    self.logger.info("Waiting 5 seconds before retry...")
+                    await asyncio.sleep(5)
+        
+        # Final cleanup when shutting down
+        await self.cleanup()
         return True
 
 

@@ -1,1 +1,8 @@
 .env
+venv/
+logs/
+recordings/
+*.pyc
+__pycache__/
+*.log
+*.pid

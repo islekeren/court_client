@@ -68,13 +68,57 @@ done
 
 echo "✅ All checks passed"
 echo ""
-echo "🚀 Starting Court Client..."
+
+# Create logs directory if it doesn't exist
+if [ ! -d "logs" ]; then
+    echo "📁 Creating logs directory..."
+    mkdir -p logs
+fi
+
+# Generate log filename with timestamp
+LOG_FILE="logs/client_$(date +%Y%m%d_%H%M%S).log"
+PID_FILE="logs/client.pid"
+
+echo "🚀 Starting Court Client in background..."
 echo "   Court ID: $COURT_ID"
 echo "   Server: $SERVER_HOST:$SERVER_PORT"
 echo "   RTSP URL: $RTSP_URL"
+echo "   Log file: $LOG_FILE"
 echo ""
-echo "   Press Ctrl+C to stop"
+echo "   The client will run in the background and auto-restart if it crashes."
+echo "   Use 'tail -f $LOG_FILE' to view logs in real-time"
+echo "   Use 'kill \$(cat $PID_FILE)' to stop the client"
 echo ""
 
-# Start the client
-./venv/bin/python court_client.py
+# Auto-restart loop - runs in background
+(
+    while true; do
+        echo "======================================" >> "$LOG_FILE"
+        echo "Starting client at $(date)" >> "$LOG_FILE"
+        echo "======================================" >> "$LOG_FILE"
+        
+        # Run the client and capture its PID
+        ./venv/bin/python court_client.py >> "$LOG_FILE" 2>&1
+        EXIT_CODE=$?
+        
+        echo "" >> "$LOG_FILE"
+        echo "======================================" >> "$LOG_FILE"
+        echo "Client stopped at $(date) with exit code $EXIT_CODE" >> "$LOG_FILE"
+        echo "Restarting in 5 seconds..." >> "$LOG_FILE"
+        echo "======================================" >> "$LOG_FILE"
+        echo "" >> "$LOG_FILE"
+        
+        # Wait before restarting to prevent rapid restart loops
+        sleep 5
+    done
+) & 
+
+# Save the PID of the background loop
+echo $! > "$PID_FILE"
+
+echo "✅ Client started with PID $(cat $PID_FILE)"
+echo "📋 Tailing log file (Ctrl+C to stop viewing, client will keep running)..."
+echo ""
+
+# Tail the log file so user can see initial startup
+tail -f "$LOG_FILE"
