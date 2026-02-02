@@ -8,6 +8,20 @@ set -e
 echo "🏟️  Court Client Setup & Startup"
 echo "================================"
 
+# Check if client is already running - ensure single instance
+EXISTING=$(pgrep -f "python.*court_client.py" 2>/dev/null || true)
+if [ -n "$EXISTING" ]; then
+    echo "⚠️  Court client is already running (PID: $EXISTING)"
+    echo "   Use ./stop_client.sh to stop it first, or run with --restart"
+    if [ "$1" = "--restart" ]; then
+        echo "🔄 Restarting client..."
+        ./stop_client.sh
+        sleep 1
+    else
+        exit 1
+    fi
+fi
+
 # Check if Python 3 is available
 if ! command -v python3 &> /dev/null; then
     echo "❌ Python 3 is required but not installed"
@@ -90,34 +104,21 @@ echo "   Use 'tail -f $LOG_FILE' to view logs in real-time"
 echo "   Use 'kill \$(cat $PID_FILE)' to stop the client"
 echo ""
 
-# Auto-restart loop - runs in background
-(
-    while true; do
-        echo "======================================" >> "$LOG_FILE"
-        echo "Starting client at $(date)" >> "$LOG_FILE"
-        echo "======================================" >> "$LOG_FILE"
-        
-        # Run the client and capture its PID
-        ./venv/bin/python court_client.py >> "$LOG_FILE" 2>&1
-        EXIT_CODE=$?
-        
-        echo "" >> "$LOG_FILE"
-        echo "======================================" >> "$LOG_FILE"
-        echo "Client stopped at $(date) with exit code $EXIT_CODE" >> "$LOG_FILE"
-        echo "Restarting in 5 seconds..." >> "$LOG_FILE"
-        echo "======================================" >> "$LOG_FILE"
-        echo "" >> "$LOG_FILE"
-        
-        # Wait before restarting to prevent rapid restart loops
-        sleep 5
-    done
-) & 
+# Run the client directly (no auto-restart wrapper - single process)
+echo "======================================" >> "$LOG_FILE"
+echo "Starting client at $(date)" >> "$LOG_FILE"
+echo "======================================" >> "$LOG_FILE"
 
-# Save the PID of the background loop
-echo $! > "$PID_FILE"
+# Start client in background
+./venv/bin/python court_client.py >> "$LOG_FILE" 2>&1 &
+CLIENT_PID=$!
 
-echo "✅ Client started with PID $(cat $PID_FILE)"
+# Save the actual Python process PID
+echo $CLIENT_PID > "$PID_FILE"
+
+echo "✅ Client started with PID $CLIENT_PID"
 echo "📋 Tailing log file (Ctrl+C to stop viewing, client will keep running)..."
+echo "   Use './stop_client.sh' to stop the client"
 echo ""
 
 # Tail the log file so user can see initial startup

@@ -3,38 +3,40 @@
 # Court Client Stop Script
 # This script stops the running court client
 
-set -e
-
 echo "🛑 Stopping Court Client..."
 
-PID_FILE="logs/client.pid"
+# Find and kill any running court_client.py processes
+PIDS=$(pgrep -f "python.*court_client.py" 2>/dev/null || true)
 
-if [ -f "$PID_FILE" ]; then
-    PID=$(cat "$PID_FILE")
+if [ -n "$PIDS" ]; then
+    echo "   Found court client process(es): $PIDS"
+    echo "   Sending termination signal..."
     
-    # Check if process is running
-    if ps -p $PID > /dev/null 2>&1; then
-        echo "   Found client process with PID $PID"
-        echo "   Sending termination signal..."
-        kill $PID
-        
-        # Wait for process to stop
-        sleep 2
-        
-        # Check if it's still running
-        if ps -p $PID > /dev/null 2>&1; then
-            echo "   Process still running, forcing termination..."
-            kill -9 $PID
-        fi
-        
-        echo "✅ Client stopped successfully"
-    else
-        echo "⚠️  No running process found with PID $PID"
+    # Send SIGTERM first for graceful shutdown
+    pkill -f "python.*court_client.py" 2>/dev/null || true
+    
+    # Wait for processes to stop
+    sleep 2
+    
+    # Check if any are still running and force kill
+    REMAINING=$(pgrep -f "python.*court_client.py" 2>/dev/null || true)
+    if [ -n "$REMAINING" ]; then
+        echo "   Process(es) still running, forcing termination..."
+        pkill -9 -f "python.*court_client.py" 2>/dev/null || true
+        sleep 1
     fi
     
-    # Clean up PID file
-    rm -f "$PID_FILE"
+    # Final check
+    FINAL=$(pgrep -f "python.*court_client.py" 2>/dev/null || true)
+    if [ -z "$FINAL" ]; then
+        echo "✅ Client stopped successfully"
+    else
+        echo "❌ Failed to stop some processes: $FINAL"
+        exit 1
+    fi
 else
-    echo "⚠️  No PID file found at $PID_FILE"
-    echo "   Client may not be running or was started manually"
+    echo "⚠️  No running court client found"
 fi
+
+# Clean up PID file if it exists
+rm -f "logs/client.pid" 2>/dev/null || true
